@@ -1,4 +1,4 @@
-
+# coding=utf-8
 import os
 import numpy as np
 
@@ -21,7 +21,6 @@ class DataLoader(object):
                 except:
                     pass
         return X, np.array(y, dtype=np.int32)
-
 
     @staticmethod
     def load(data_dir, task_names):

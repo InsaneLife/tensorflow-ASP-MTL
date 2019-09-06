@@ -1,4 +1,3 @@
-
 import numpy as np
 import tensorflow as tf
 
@@ -8,11 +7,13 @@ from tensorflow.python.framework import ops
 from tf_common.nn_module import encode, attend, word_dropout
 from tf_common.optimizer import LazyNadamOptimizer
 
+np.random.seed(9102)
 
 class FlipGradientBuilder(object):
     """
     Code: https://github.com/pumpikano/tf-dann/blob/master/flip_gradient.py
     """
+
     def __init__(self):
         self.num_calls = 0
 
@@ -35,6 +36,8 @@ class SharedPrivateModel(object):
 
     def __init__(self, params, task_names, init_embedding_matrix=None):
 
+        self.task_data_ids = {}
+        self.task_data_index = {}
         self.model_name = params["model_name"]
         self.params = params
         self.task_names = task_names
@@ -48,7 +51,6 @@ class SharedPrivateModel(object):
         self.train_writer = tf.summary.FileWriter(self.params["summary_dir"] + '/train', self.sess.graph)
         self.test_writer = tf.summary.FileWriter(self.params["summary_dir"] + '/test')
 
-
     def _init_session(self):
         config = tf.ConfigProto(device_count={"gpu": 1})
         config.gpu_options.allow_growth = True
@@ -60,29 +62,25 @@ class SharedPrivateModel(object):
         saver = tf.train.Saver(max_to_keep=None)
         return sess, saver
 
-
     def save_session(self):
         self.saver.save(self.sess, self.params["weights_dir"] + "/model.checkpoint")
 
-
     def restore_session(self):
         self.saver.restore(self.sess, self.params["weights_dir"] + "/model.checkpoint")
-
 
     def _get_summary(self):
         with tf.name_scope(self.model_name + "/"):
             tf.summary.scalar("loss_all", self.all_loss)
             tf.summary.scalar("acc_all", self.all_acc)
             for task_name in self.task_names:
-                tf.summary.scalar("loss_"+task_name, self.loss[task_name])
-                tf.summary.scalar("acc_"+task_name, self.acc[task_name])
+                tf.summary.scalar("loss_" + task_name, self.loss[task_name])
+                tf.summary.scalar("acc_" + task_name, self.acc[task_name])
             # error: https://blog.csdn.net/u012436149/article/details/53894364
             # summary = tf.summary.merge_all()
             summary = tf.summary.merge(
                 tf.get_collection(tf.GraphKeys.SUMMARIES, self.model_name)
             )
             return summary
-
 
     def _get_embedding_matrix(self):
         with tf.name_scope("embedding"):
@@ -103,7 +101,6 @@ class SharedPrivateModel(object):
                                          trainable=self.params["embedding_trainable"])
             return emb_matrix
 
-
     def _base_feature_extractor(self, emb_seq, seq_len, name, reuse):
         #### encode
         input_dim = self.params["embedding_dim"]
@@ -112,7 +109,7 @@ class SharedPrivateModel(object):
                          params=self.params,
                          sequence_length=seq_len,
                          mask_zero=self.params["embedding_mask_zero"],
-                         scope_name=self.model_name + "_encode_%s"%name, reuse=reuse,
+                         scope_name=self.model_name + "_encode_%s" % name, reuse=reuse,
                          training=self.training)
         #### attend
         feature_dim = self.params["encode_dim"]
@@ -122,20 +119,17 @@ class SharedPrivateModel(object):
                          feature_dim=feature_dim,
                          attention_dim=self.params["attention_dim"],
                          method=self.params["attend_method"],
-                         scope_name=self.model_name + "_attention_%s"%name,
+                         scope_name=self.model_name + "_attention_%s" % name,
                          reuse=reuse, num_heads=self.params["attention_num_heads"])
         return att_seq
-
 
     def _shared_feature_extractor(self, emb_seq, seq_len):
         with tf.name_scope("shared_part/"):
             return self._base_feature_extractor(emb_seq, seq_len, name="shared_part", reuse=tf.AUTO_REUSE)
 
-
     def _private_feature_extractor(self, emb_seq, seq_len, task_name):
         with tf.name_scope(task_name + "/"):
-            return self._base_feature_extractor(emb_seq, seq_len, name="%s_private_part"%task_name, reuse=False)
-
+            return self._base_feature_extractor(emb_seq, seq_len, name="%s_private_part" % task_name, reuse=False)
 
     def _domain_discriminator_with_shared_features(self, shared_features):
         """
@@ -143,8 +137,8 @@ class SharedPrivateModel(object):
          it is shared across all the tasks
          """
         with tf.name_scope("shared_part/"):
-            return tf.layers.dense(shared_features, len(self.task_names), reuse=tf.AUTO_REUSE, name="task_discriminator_with_shared_features")
-
+            return tf.layers.dense(shared_features, len(self.task_names), reuse=tf.AUTO_REUSE,
+                                   name="task_discriminator_with_shared_features")
 
     def _domain_discriminator_with_private_features(self, private_features):
         """
@@ -152,8 +146,8 @@ class SharedPrivateModel(object):
         it is shared across all the tasks
         """
         with tf.name_scope("shared_part/"):
-            return tf.layers.dense(private_features, len(self.task_names), reuse=tf.AUTO_REUSE, name="task_discriminator_with_private_features")
-
+            return tf.layers.dense(private_features, len(self.task_names), reuse=tf.AUTO_REUSE,
+                                   name="task_discriminator_with_private_features")
 
     def _adversarial_loss(self, shared_features, task_labels):
         with tf.name_scope("shared_part/"):
@@ -166,12 +160,12 @@ class SharedPrivateModel(object):
 
             return loss
 
-
-    def _difference_loss(self, private_features, shared_features, weight=1.0):
-        '''
+    @staticmethod
+    def _difference_loss(private_features, shared_features, weight=1.0):
+        """
         Paper: Domain Separation Networks
         Code: https://github.com/tensorflow/models/blob/master/research/domain_adaptation/domain_separation/losses.py
-        '''
+        """
         with tf.name_scope("shared_part/"):
             private_features -= tf.reduce_mean(private_features, 0)
             shared_features -= tf.reduce_mean(shared_features, 0)
@@ -191,7 +185,6 @@ class SharedPrivateModel(object):
 
             return loss
 
-
     def _domain_loss(self, private_features, task_labels):
         '''
         Paper: Cross-Domain Review Helpfulness Prediction based on Convolutional Neural Networks
@@ -205,7 +198,6 @@ class SharedPrivateModel(object):
             loss = tf.reduce_mean(loss)
 
             return loss
-
 
     def _build_task_graph(self, task_name):
 
@@ -259,7 +251,6 @@ class SharedPrivateModel(object):
 
         return probas, loss, acc
 
-
     def _build(self):
         self.task_labels = {}
         self.labels = {}
@@ -283,25 +274,29 @@ class SharedPrivateModel(object):
                                                           schedule_decay=self.params["schedule_decay"])
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                 with tf.control_dependencies(update_ops):
-                    self.train_ops[task_name] = optimizer[task_name].minimize(self.loss[task_name], global_step=self.global_step)
-        self.all_loss = tf.add_n(list(self.loss.values()))/self.num_tasks
-        self.all_acc = tf.add_n(list(self.acc.values()))/self.num_tasks
+                    self.train_ops[task_name] = optimizer[task_name].minimize(self.loss[task_name],
+                                                                              global_step=self.global_step)
+        self.all_loss = tf.add_n(list(self.loss.values())) / self.num_tasks
+        self.all_acc = tf.add_n(list(self.acc.values())) / self.num_tasks
         self.all_train_ops = list(self.train_ops.values())
-
 
     def _get_feed_dict_for_train(self, X_train, y_train):
         feed_dict = {}
         for task_name in X_train.keys():
-            l = len(y_train[task_name])
-            idx = np.random.choice(range(l), self.params["batch_size"])
+            cur_end = self.task_data_index[task_name] + self.params['batch_size']
+            idx = self.task_data_ids[task_name][self.task_data_index[task_name]: cur_end]
+            if cur_end >= len(self.task_data_ids[task_name]):
+                cur_end = 0
+                np.random.shuffle(self.task_data_ids[task_name])
+            self.task_data_index[task_name] = cur_end
+
             feed_dict.update({
-                self.task_labels[task_name]: self.task_name_mapper[task_name]*np.ones(len(idx)),
+                self.task_labels[task_name]: self.task_name_mapper[task_name] * np.ones(len(idx)),
                 self.labels[task_name]: y_train[task_name][idx],
                 self.seq_word[task_name]: X_train[task_name][idx],
                 self.training: True,
             })
         return feed_dict
-
 
     def _get_feed_dict_for_infer(self, X, idx, task_name):
         feed_dict = {
@@ -309,7 +304,6 @@ class SharedPrivateModel(object):
             self.training: False,
         }
         return feed_dict
-
 
     def _get_batch_index(self, seq, step):
         n = len(seq)
@@ -321,11 +315,18 @@ class SharedPrivateModel(object):
             res.append(seq[len(res) * step:])
         return res
 
+    def init_taks_data_ids(self, y_train):
+        for task_name in self.task_names:
+            l = len(y_train[task_name])
+            self.task_data_ids[task_name] = [i for i in range(l)]
+            np.random.shuffle(self.task_data_ids[task_name])
+            self.task_data_index[task_name] = 0
 
     def fit(self, X_train, y_train, X_valid=None, y_valid=None):
         total_loss = 0.
         total_acc = 0.
         metric_decay = 0.9
+        self.init_taks_data_ids(y_train)
         for batch in range(self.params["max_batch"]):
             feed_dict = self._get_feed_dict_for_train(X_train, y_train)
             if self.params["training_mode"] == "joint":
@@ -359,7 +360,6 @@ class SharedPrivateModel(object):
             else:
                 self.train_writer.add_summary(summary, batch + 1)
 
-
     def _predict_proba_inner(self, X, task_name):
         l = X.shape[0]
         train_idx = np.arange(l)
@@ -373,14 +373,12 @@ class SharedPrivateModel(object):
         y = np.vstack(y).astype(np.float32)
         return y
 
-
     def predict_proba(self, X):
         y = {}
         for task_name in X.keys():
             p = self._predict_proba_inner(X[task_name], task_name)
-            y[task_name] = p[:,1]
+            y[task_name] = p[:, 1]
         return y
-
 
     def predict(self, X):
         y = {}
@@ -389,22 +387,27 @@ class SharedPrivateModel(object):
             y[task_name] = np.argmax(p, 1)
         return y
 
-
     def evaluate(self, X, y):
         all_loss = 0.
-        all_acc = 0.
+        avg_acc = 0.
         summary = tf.Summary()
+        all_acc = []
         for task_name in y.keys():
             p = self._predict_proba_inner(X[task_name], task_name)
             y_pred = np.argmax(p, 1)
-            loss = log_loss(y_true=y[task_name], y_pred=p[:,1])
+            loss = log_loss(y_true=y[task_name], y_pred=p[:, 1])
+            all_acc.extend(y[task_name] == y_pred)
             acc = np.mean(y[task_name] == y_pred)
+            avg_acc += acc
             all_loss += loss
-            all_acc += acc
-            summary.value.add(tag="loss_"+task_name, simple_value=loss)
-            summary.value.add(tag="acc_"+task_name, simple_value=acc)
+            summary.value.add(tag="loss_" + task_name, simple_value=loss)
+            summary.value.add(tag="acc_" + task_name, simple_value=acc)
+            print("acc_" + task_name, acc)
         all_loss /= float(len(y.keys()))
-        all_acc /= float(len(y.keys()))
+        all_acc = np.mean(all_acc)
+        avg_acc /= float(len(y.keys()))
         summary.value.add(tag="loss_all", simple_value=all_loss)
         summary.value.add(tag="acc_all", simple_value=all_acc)
+        print("all_acc: ", all_acc, "avg_acc: ", avg_acc)
+        print("-" * 50)
         return summary, all_loss, all_acc
